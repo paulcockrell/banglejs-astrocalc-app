@@ -1,5 +1,8 @@
 /*
- Compress with default settings at https://skalman.github.io/UglifyJS-online/
+ XXX Please note when developing:
+ IDE settings:
+   Esprima: Minification = TRUE
+   Esprima: Mangle = FALSE
  */
 
 /*
@@ -9,8 +12,6 @@
  SunCalc is a JavaScript library for calculating sun/moon position and light phases.
  https://github.com/mourner/suncalc
 */
-
-// shortcuts for easier to read formulas
 
 class Calc {
     constructor() {}
@@ -40,7 +41,7 @@ class Calc {
     }
 
     fromJulian(j) {
-        return new Date((j + 0.5 - this.J1970) * this.DAY_MS);
+        return (j + 0.5 - this.J1970) * this.DAY_MS;
     }
 
     toDays(date) {
@@ -130,29 +131,33 @@ class Calc {
 }
 
 class SunCalc extends Calc {
-    constructor(date, lat, lng) {
-        super();
+    constructor(gps) {
+        super(gps);
 
-        this.date = date;
-        this.lat = lat;
-        this.lng = lng;
+        this.gps = gps;
     }
+
+    get date() { return this.gps.time; }
+    get lat() { return this.gps.lat; }
+    get lng() { return this.gps.lon; }
 
     /* Public methods */
 
     /**
      * Calculates sun position for a given date and latitude/longitude
-     * 
+     *
+     * @param   {Date}   date DateTime to get position of sun
+     *
      * @returns {Object} result
      * @returns {number} result.azimuth
      * @returns {number} result.altitude
      */
-    getPosition() {
+    getPosition(date) {
         const RAD = this.RAD;
 
         const lw  = RAD * -this.lng,
               phi = RAD * this.lat,
-              d   = this.toDays(this.date);
+              d   = this.toDays(date);
 
         const c  = this.sunCoords(d),
               H  = this.siderealTime(d, lw) - c.ra;
@@ -227,12 +232,12 @@ class SunCalc extends Calc {
 
             // Remove 12 hours from time, due to bug described above.
             // To test out issue uncomment the commented line and run in regular JS interperator
-            result[time[1]] = new Date(this.fromJulian(jRise) - (this.DAY_MS / 2));
+            result[time[1]] = this.fromJulian(jRise) - (this.DAY_MS / 2);
             // result[time[1]] = this.fromJulian(jRise);
 
             // Add 12 hours to time, due to bug described above.
             // To test out issue uncomment the commented line and run in regular JS interperator
-            result[time[2]] = new Date(this.fromJulian(jSet) + (this.DAY_MS / 2));
+            result[time[2]] = this.fromJulian(jSet) + (this.DAY_MS / 2);
             //result[time[2]] = this.fromJulian(jSet);
         }
 
@@ -306,13 +311,15 @@ class SunCalc extends Calc {
 
 // moon calculations, based on http://aa.quae.nl/en/reken/hemelpositie.html formulas
 class MoonCalc extends Calc {
-    constructor(date, lat, lng) {
-        super();
+    constructor(gps) {
+      super(gps);
 
-        this.date = date;
-        this.lat = lat;
-        this.lng = lng;
+      this.gps = gps;
     }
+
+    get date() { return this.gps.time; }
+    get lat() { return this.gps.lat; }
+    get lng() { return this.gps.lon; }
 
     /* Public methods */
 
@@ -369,9 +376,7 @@ class MoonCalc extends Calc {
 
     // calculations for moon rise/set times are based on http://www.stargazing.net/kepler/moonrise.html article
     getTimes(inUTC) {
-        const date = this.date,
-              lat = this.lat,
-              lng = this.lng;
+        const date = this.date;
 
         if (inUTC) {
             date.setUTCHours(0, 0, 0, 0);
@@ -383,12 +388,12 @@ class MoonCalc extends Calc {
 
         const hc = 0.133 * RAD;
 
-        let h0 = this.getPosition(date, lat, lng).altitude - hc;
+        let h0 = this.getPosition(date).altitude - hc;
 
         // go in 2-hour chunks, each time seeing if a 3-point quadratic curve crosses zero (which means rise or set)
         for (let i = 1; i <= 24; i += 2) {
-            let h1 = this.getPosition(this.hoursLater(date, i), lat, lng).altitude - hc;
-            let h2 = this.getPosition(this.hoursLater(date, i + 1), lat, lng).altitude - hc;
+            let h1 = this.getPosition(this.hoursLater(date, i)).altitude - hc;
+            let h2 = this.getPosition(this.hoursLater(date, i + 1)).altitude - hc;
 
             let a = (h0 + h2) / 2 - h1;
             let b = (h2 - h0) / 2;
@@ -458,66 +463,102 @@ class MoonCalc extends Calc {
     }
 }
 
-let sunCalc, moonCalc, gpsFix, currentPageIdx;
+function drawMoonRiseAndSetPage(moonCalc) {
+  const moonTimes = moonCalc.getTimes();
+  const riseTime = moonTimes.rise;
+  const setTime = moonTimes.set;
 
-function drawGPSWaitPage() {
-    g.clear();
-    g.setFont("6x8");
-    g.drawString("Locating GPS", 80, 100);
-    g.drawString("Please wait...", 80, 110);
+  g.clear();
+  g.setFont("6x8", 2);
+
+  g.drawString("Moon", 5, 0);
+  g.drawString(`Rise: ${riseTime.getHours()}:${riseTime.getMinutes()}`, 5, 20);
+  g.drawString(`Set: ${setTime.getHours()}:${setTime.getMinutes()}`, 5, 40);
+
+  g.flip();
+
+  m = setWatch(() => {
+      m = moonIndexPageMenu(moonCalc);
+  }, BTN3, {repeat: false, edge: "falling"});
+
+  return null;
 }
 
-/**
- * Draws the Sun information page, pressing BTN1 will scroll you up the page, pressing BTN3 will scroll you down the page
- * Swiping left or right will take you to the Moon information page.
- */
-function drawSunPage() {
-    if (!sunCalc) sunCalc = new SunCalc(gpsFix.time, gpsFix.lat, gpsFix.lon);
+function drawSunShowPage(sunCalc, key) {
+  const sunTime = new Date(sunCalc.getTimes()[key]);
+  const sunPos = sunCalc.getPosition(sunTime);
 
-    let sunTimes = sunCalc.getTimes();
-    let yPos = 0;
-    
-    g.clear();
-    g.setFont("6x8");
+  g.clear();
+  g.setFont("6x8", 2);
 
-    Object.keys(sunTimes).forEach((k) => {
-        let item = `${k}: ${sunTimes[k]}`;
-        g.drawString(item, 10, yPos += 10);
-    });
+  g.drawString(key, 5, 0);
+  g.drawString(`Time: ${sunTime.getHours()}:${sunTime.getMinutes()}`, 5, 20);
+  g.drawString(`Altitude: ${sunPos.altitude}`, 5, 40);
+  g.drawString(`Azimuth: ${sunPos.azimuth}`, 5, 60);
+
+  g.flip();
+
+  m = setWatch(() => {
+      m = sunIndexPageMenu(sunCalc);
+  }, BTN3, {repeat: false, edge: "falling"});
+
+  return null;
+}
+
+function sunIndexPageMenu(sunCalc) {
+    const sunTimes = sunCalc.getTimes();
+
+    const sunMenu = {
+      "": {
+        "title": "-- Sun --",
+      },
+      "< Back": () => m = indexPageMenu(sunCalc.gps),
+    };
+
+    Object.keys(sunTimes).sort().reduce((menu, key) => {
+      menu[key] = () => {
+        m = E.showMenu();
+        drawSunShowPage(sunCalc, key);
+      };
+      return menu;
+    }, sunMenu);
+
+    return E.showMenu(sunMenu);
 }
 
 
-/**
- * Draws the Moon information page, pressing BTN1 will scroll you up the page, pressing BTN3 will scroll you down the page
- * Swiping left or right will take you to the Sun information page.
- */
-function drawMoonPage() {
-    if (!moonCalc) moonCalc = new MoonCalc(gpsFix.time, gpsFix.lat, gpsFix.lon);
+function moonIndexPageMenu(moonCalc) {
+    const moonMenu = {
+      "": {
+        "title": "-- Moon --",
+      },
+      "Rise and set": () => {
+        m = E.showMenu();
+        drawMoonRiseAndSetPage(moonCalc);
+      },
+      "< Back": () => m = indexPageMenu(moonCalc.gps),
+    };
 
-    let moonTimes = moonCalc.getTimes();
-    let yPos = 0;
-    
-    g.clear();
-    g.setFont("6x8");
-
-    Object.keys(moonTimes).forEach((k) => {
-        let item = `${k}: ${moonTimes[k]}`;
-        g.drawString(item, 10, yPos += 10);
-    });
+    return E.showMenu(moonMenu);
 }
 
-function moveToNextPage() {
-    switch(currentPageIdx) {
-        case 0:
-            currentPageIdx = 1;
-            break;
-        case 1:
-        default:
-            currentPageIdx = 0;
-    }
+function indexPageMenu(gps) {
+  const menu = {
+    "": {
+      "title": "Select",
+    },
+    "Sun": () => {
+      const sunCalc = new SunCalc(gps);
+      m = sunIndexPageMenu(sunCalc);
+    },
+    "Moon": () => {
+      const moonCalc = new MoonCalc(gps);
+      m = moonIndexPageMenu(moonCalc);
+    },
+    "< Exit": () => { load(); }
+  };
 
-    const page = pages[currentPageIdx];
-    page();
+  return E.showMenu(menu);
 }
 
 /**
@@ -525,37 +566,44 @@ function moveToNextPage() {
  */
 function drawGPSWaitPage() {
     g.clear();
-    g.setFont("6x8");
-    g.drawString("Locating GPS", 80, 100);
-    g.drawString("Please wait...", 80, 110);
+    g.setFont("6x8", 2);
+    g.drawString("Locating GPS", 25, 100);
+    g.drawString("Please wait...", 25, 115);
+    g.flip();
 
-    Bangle.on('GPS', (fix) => {
-        if (fix.fix === 0) return;
+    const DEBUG = true;
+    if (DEBUG) {
+      const gpsFix = {
+        "lat": 56.45783133333,
+        "lon": -3.02188583333,
+        "alt": 75.3,
+        "speed": 0.070376,
+        "course": NaN,
+        "time":new Date(),
+        "satellites": 4,
+        "fix": 1
+      };
+
+      m = indexPageMenu(gpsFix);
+
+      return;
+    }
+
+    Bangle.on('GPS', (gpsFix) => {
+        if (gpsFix.fix === 0) return;
 
         Bangle.setGPSPower(0);
         Bangle.buzz();
         Bangle.setLCDPower(true);
 
-        gpsFix = fix;
-
-        moveToNextPage();
+        m = indexPageMenu(gpsFix);
     });
 }
-
-const pages = [drawSunPage, drawMoonPage];
 
 function init() {
     Bangle.setGPSPower(1);
     drawGPSWaitPage();
-
-    Bangle.on('swipe', (_direction) => {
-        if (gpsFix) moveToNextPage();
-    });
-
-    setWatch(() => {
-        Bangle.setLCDMode();
-        Bangle.showLauncher();
-    }, BTN2, {repeat: false, edge: "falling"});
 }
 
+let m;
 init();
